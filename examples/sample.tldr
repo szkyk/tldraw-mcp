@@ -1,0 +1,141 @@
+{
+  "tldrawFileFormatVersion": 1,
+  "schema": {
+    "schemaVersion": 2,
+    "sequences": {
+      "com.tldraw.store": 4,
+      "com.tldraw.asset": 1,
+      "com.tldraw.camera": 1,
+      "com.tldraw.document": 2,
+      "com.tldraw.instance": 25,
+      "com.tldraw.instance_page_state": 5,
+      "com.tldraw.page": 1,
+      "com.tldraw.pointer": 1,
+      "com.tldraw.shape": 4,
+      "com.tldraw.shape.geo": 10,
+      "com.tldraw.shape.text": 3,
+      "com.tldraw.shape.note": 9
+    }
+  },
+  "records": [
+    {
+      "id": "document:document",
+      "typeName": "document",
+      "gridSize": 10,
+      "name": "Sample Canvas",
+      "meta": {}
+    },
+    {
+      "id": "page:main",
+      "typeName": "page",
+      "name": "Main",
+      "index": "a1",
+      "meta": {}
+    },
+    {
+      "id": "instance_page_state:page:main",
+      "typeName": "instance_page_state",
+      "pageId": "page:main",
+      "selectedShapeIds": [],
+      "hintingShapeIds": [],
+      "erasingShapeIds": [],
+      "hoveredShapeId": null,
+      "editingShapeId": null,
+      "croppingShapeId": null,
+      "focusedGroupId": null,
+      "meta": {}
+    },
+    {
+      "id": "camera:page:main",
+      "typeName": "camera",
+      "x": 0,
+      "y": 0,
+      "z": 1,
+      "meta": {}
+    },
+    {
+      "id": "shape:welcome",
+      "typeName": "shape",
+      "type": "geo",
+      "x": 100,
+      "y": 100,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "parentId": "page:main",
+      "index": "a1",
+      "meta": {},
+      "props": {
+        "w": 300,
+        "h": 120,
+        "geo": "rectangle",
+        "color": "blue",
+        "labelColor": "black",
+        "fill": "semi",
+        "dash": "draw",
+        "size": "m",
+        "font": "draw",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "growY": 0,
+        "url": "",
+        "scale": 1,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "attrs": { "dir": "auto" },
+              "content": [
+                { "type": "text", "text": "Welcome to tldraw-mcp!" }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "attrs": { "dir": "auto" },
+              "content": [
+                { "type": "text", "text": "This is an example canvas." }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "shape:note1",
+      "typeName": "shape",
+      "type": "note",
+      "x": 450,
+      "y": 100,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "parentId": "page:main",
+      "index": "a2",
+      "meta": {},
+      "props": {
+        "color": "yellow",
+        "size": "m",
+        "font": "draw",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "growY": 0,
+        "fontSizeAdjustment": 0,
+        "url": "",
+        "scale": 1,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "attrs": { "dir": "auto" },
+              "content": [
+                { "type": "text", "text": "AI agents can read and update this!" }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

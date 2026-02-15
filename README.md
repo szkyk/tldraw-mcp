@@ -79,7 +79,7 @@ curl -fsS https://raw.githubusercontent.com/talhaorak/tldraw-mcp/main/SKILLS.md 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TLDRAW_DIR` | `~/.tldraw` | Base directory for `.tldr` files |
+| `TLDRAW_DIR` | `~/.tldraw` | Base directory for supported tldraw files (`.tldr` and markdown with embedded tldraw data) |
 
 ## Tools
 
@@ -92,11 +92,16 @@ tldraw_read({ path: "notes.md" })
 ```
 
 ### `tldraw_write`
-Write or update a `.tldr` file (validates format).
+Write or update a `.tldr` file or markdown-embedded tldraw block (`.md`) (validates format).
 
 ```
 tldraw_write({ 
   path: "notes.tldr",
+  content: { /* tldraw file object */ }
+})
+
+tldraw_write({
+  path: "notes.md",
   content: { /* tldraw file object */ }
 })
 ```
@@ -130,7 +135,7 @@ tldraw_get_shapes({ path: "notes.tldr", pageId: "page:abc123" })
 ```
 
 ### `tldraw_add_shape`
-Add a new shape to a canvas.
+Add a new shape to a supported canvas file (`.tldr` or markdown-embedded `.md`).
 
 ```
 tldraw_add_shape({
@@ -151,7 +156,7 @@ tldraw_add_shape({
 ```
 
 ### `tldraw_update_shape`
-Update properties of an existing shape.
+Update properties of an existing shape in a supported canvas file (`.tldr` or markdown-embedded `.md`).
 
 ```
 tldraw_update_shape({
@@ -162,7 +167,7 @@ tldraw_update_shape({
 ```
 
 ### `tldraw_delete_shape`
-Delete a shape from a canvas.
+Delete a shape from a supported canvas file (`.tldr` or markdown-embedded `.md`).
 
 ```
 tldraw_delete_shape({
@@ -188,7 +193,7 @@ This server accepts the following input formats:
    - `!!!_START_OF_TLDRAW_DATA__DO_NOT_CHANGE_THIS_PHRASE_!!!`
    - `!!!_END_OF_TLDRAW_DATA__DO_NOT_CHANGE_THIS_PHRASE_!!!`
 
-All reads are normalized to:
+Reads and writes are normalized to:
 
 ```json
 {
@@ -205,7 +210,7 @@ All reads are normalized to:
 }
 ```
 
-Write/edit tools remain `.tldr` only (`.md` is read-only).
+For markdown files, only the JSON content between the start/end tldraw markers is replaced. Frontmatter and surrounding markdown text are preserved.
 
 ## Development
 

@@ -64,6 +64,12 @@ interface ParsedTldrawContent {
   wrappedContainer?: Record<string, unknown>;
 }
 
+interface MarkdownTldrawBlock {
+  jsonStart: number;
+  jsonEnd: number;
+  jsonText: string;
+}
+
 // Security: Prevent path traversal
 function securePath(inputPath: string): string {
   const baseDir = resolve(TLDRAW_DIR);
@@ -135,12 +141,20 @@ function parseJsonContent(content: string, pathLabel: string): unknown {
   }
 }
 
-function extractTldrawJsonFromMarkdown(markdown: string, pathLabel: string): string {
+function locateMarkdownTldrawBlock(markdown: string, pathLabel: string): MarkdownTldrawBlock {
   const startIndex = markdown.indexOf(MARKDOWN_TLDRAW_START_MARKER);
   if (startIndex === -1) {
     throw new Error(
       `No embedded tldraw block found in ${pathLabel} (missing ${MARKDOWN_TLDRAW_START_MARKER})`
     );
+  }
+
+  const duplicateStartIndex = markdown.indexOf(
+    MARKDOWN_TLDRAW_START_MARKER,
+    startIndex + MARKDOWN_TLDRAW_START_MARKER.length
+  );
+  if (duplicateStartIndex !== -1) {
+    throw new Error(`Multiple embedded tldraw start markers found in ${pathLabel}`);
   }
 
   const endIndex = markdown.indexOf(
@@ -153,15 +167,27 @@ function extractTldrawJsonFromMarkdown(markdown: string, pathLabel: string): str
     );
   }
 
-  const jsonText = markdown
-    .slice(startIndex + MARKDOWN_TLDRAW_START_MARKER.length, endIndex)
-    .trim();
+  const duplicateEndIndex = markdown.indexOf(
+    MARKDOWN_TLDRAW_END_MARKER,
+    endIndex + MARKDOWN_TLDRAW_END_MARKER.length
+  );
+  if (duplicateEndIndex !== -1) {
+    throw new Error(`Multiple embedded tldraw end markers found in ${pathLabel}`);
+  }
+
+  const jsonStart = startIndex + MARKDOWN_TLDRAW_START_MARKER.length;
+  const jsonEnd = endIndex;
+  const jsonText = markdown.slice(jsonStart, jsonEnd).trim();
 
   if (!jsonText) {
     throw new Error(`Embedded tldraw block is empty in ${pathLabel}`);
   }
 
-  return jsonText;
+  return {
+    jsonStart,
+    jsonEnd,
+    jsonText,
+  };
 }
 
 function normalizeTldrawPayload(data: unknown): {
@@ -201,12 +227,13 @@ async function parseTldrawContent(path: string): Promise<ParsedTldrawContent> {
   const content = await readFile(filepath, "utf-8");
 
   if (filepath.endsWith(".md")) {
-    const jsonText = extractTldrawJsonFromMarkdown(content, path);
-    const data = parseJsonContent(jsonText, path);
-    const { file } = normalizeTldrawPayload(data);
+    const block = locateMarkdownTldrawBlock(content, path);
+    const data = parseJsonContent(block.jsonText, path);
+    const { file, wrappedContainer } = normalizeTldrawPayload(data);
     return {
       file,
       storageFormat: "embedded-markdown",
+      wrappedContainer,
     };
   }
 
@@ -336,18 +363,38 @@ async function tldrawRead(path: string): Promise<TldrawFile> {
 async function tldrawWrite(path: string, content: TldrawFile | string): Promise<string> {
   const filepath = securePath(path);
   
-  if (!filepath.endsWith('.tldr')) {
-    throw new Error('File must have .tldr extension (.md is read-only)');
+  if (!isReadableTldrawPath(filepath)) {
+    throw new Error('File must have .tldr or .md extension');
   }
-  
-  // Ensure parent directory exists
-  const dir = filepath.substring(0, filepath.lastIndexOf('/'));
-  await ensureDir(dir);
-  
+
   const parsedInput = typeof content === "string"
     ? parseJsonContent(content, path)
     : content;
   const { file, wrappedContainer: inputWrappedContainer } = normalizeTldrawPayload(parsedInput);
+
+  if (filepath.endsWith(".md")) {
+    if (!existsSync(filepath)) {
+      throw new Error(`File not found: ${path}`);
+    }
+
+    const markdownContent = await readFile(filepath, "utf-8");
+    const block = locateMarkdownTldrawBlock(markdownContent, path);
+    const existingData = parseJsonContent(block.jsonText, path);
+    const { wrappedContainer: existingWrappedContainer } = normalizeTldrawPayload(existingData);
+
+    const wrappedContainer = existingWrappedContainer || inputWrappedContainer;
+    const outputContent = wrappedContainer
+      ? { ...wrappedContainer, raw: file }
+      : file;
+
+    const updatedMarkdown = `${markdownContent.slice(0, block.jsonStart)}\n${JSON.stringify(outputContent, null, 2)}\n${markdownContent.slice(block.jsonEnd)}`;
+    await writeFile(filepath, updatedMarkdown, "utf-8");
+    return `Successfully wrote: ${path}`;
+  }
+
+  // Ensure parent directory exists for .tldr writes
+  const dir = filepath.substring(0, filepath.lastIndexOf('/'));
+  await ensureDir(dir);
 
   const existingWrappedContainer = await getWrappedContainerForTldraw(filepath);
   const wrappedContainer = existingWrappedContainer || inputWrappedContainer;
@@ -596,7 +643,7 @@ const ReadSchema = z.object({
 });
 
 const WriteSchema = z.object({
-  path: z.string().describe("Path to .tldr file"),
+  path: z.string().describe("Path to .tldr file or markdown file with embedded tldraw data"),
   content: z.union([z.string(), z.object({}).passthrough()]).describe("File content (JSON string or object)")
 });
 
@@ -615,7 +662,7 @@ const GetShapesSchema = z.object({
 });
 
 const AddShapeSchema = z.object({
-  path: z.string().describe("Path to .tldr file"),
+  path: z.string().describe("Path to .tldr file or markdown file with embedded tldraw data"),
   pageId: z.string().optional().describe("Target page ID"),
   shape: z.object({
     type: z.string().optional(),
@@ -626,13 +673,13 @@ const AddShapeSchema = z.object({
 });
 
 const UpdateShapeSchema = z.object({
-  path: z.string().describe("Path to .tldr file"),
+  path: z.string().describe("Path to .tldr file or markdown file with embedded tldraw data"),
   shapeId: z.string().describe("Shape ID to update"),
   updates: z.object({}).passthrough().describe("Properties to update")
 });
 
 const DeleteShapeSchema = z.object({
-  path: z.string().describe("Path to .tldr file"),
+  path: z.string().describe("Path to .tldr file or markdown file with embedded tldraw data"),
   shapeId: z.string().describe("Shape ID to delete")
 });
 
@@ -671,11 +718,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "tldraw_write",
-        description: "Write or update a tldraw canvas file. Validates format before saving.",
+        description: "Write or update a tldraw canvas file (.tldr) or markdown-embedded tldraw block (.md). Validates format before saving.",
         inputSchema: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Path to .tldr file" },
+            path: { type: "string", description: "Path to .tldr file or markdown file with embedded tldraw data" },
             content: { type: "object", description: "File content (tldraw format)" }
           },
           required: ["path", "content"]
@@ -729,11 +776,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "tldraw_add_shape",
-        description: "Add a new shape to a tldraw file. Returns the new shape ID.",
+        description: "Add a new shape to a tldraw file (.tldr or markdown with embedded tldraw). Returns the new shape ID.",
         inputSchema: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Path to .tldr file" },
+            path: { type: "string", description: "Path to .tldr file or markdown file with embedded tldraw data" },
             pageId: { type: "string", description: "Target page ID" },
             shape: { 
               type: "object",
@@ -751,11 +798,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "tldraw_update_shape",
-        description: "Update properties of an existing shape.",
+        description: "Update properties of an existing shape in .tldr or markdown-embedded tldraw data.",
         inputSchema: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Path to .tldr file" },
+            path: { type: "string", description: "Path to .tldr file or markdown file with embedded tldraw data" },
             shapeId: { type: "string", description: "Shape ID to update" },
             updates: { type: "object", description: "Properties to update" }
           },
@@ -764,11 +811,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "tldraw_delete_shape",
-        description: "Delete a shape from a tldraw file.",
+        description: "Delete a shape from a tldraw file (.tldr or markdown with embedded tldraw data).",
         inputSchema: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Path to .tldr file" },
+            path: { type: "string", description: "Path to .tldr file or markdown file with embedded tldraw data" },
             shapeId: { type: "string", description: "Shape ID to delete" }
           },
           required: ["path", "shapeId"]

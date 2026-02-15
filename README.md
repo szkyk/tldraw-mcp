@@ -16,6 +16,7 @@ Existing tldraw MCP servers let AI draw on an in-memory canvas. **This project i
 - 📋 **List** — Enumerate all `.tldr` files with metadata
 - 🔍 **Search** — Full-text search across all canvases
 - 🔷 **Shape CRUD** — Add, update, delete shapes programmatically
+- 🧩 **Format Compatibility** — Supports plain `.tldr`, wrapped `raw` `.tldr`, and markdown-embedded tldraw data
 
 ## Installation
 
@@ -83,10 +84,11 @@ curl -fsS https://raw.githubusercontent.com/talhaorak/tldraw-mcp/main/SKILLS.md 
 ## Tools
 
 ### `tldraw_read`
-Read a `.tldr` file and return its parsed content.
+Read a `.tldr` file or markdown file with embedded tldraw data and return normalized parsed content.
 
 ```
 tldraw_read({ path: "notes.tldr" })
+tldraw_read({ path: "notes.md" })
 ```
 
 ### `tldraw_write`
@@ -107,21 +109,21 @@ tldraw_create({ path: "new-canvas.tldr", name: "My Canvas" })
 ```
 
 ### `tldraw_list`
-List all `.tldr` files with page/shape counts.
+List all supported tldraw files (`.tldr` and markdown with embedded tldraw data) with page/shape counts.
 
 ```
 tldraw_list({ recursive: true })
 ```
 
 ### `tldraw_search`
-Search text content across all canvases.
+Search text content across all supported canvases.
 
 ```
 tldraw_search({ query: "TODO", searchIn: "text" })
 ```
 
 ### `tldraw_get_shapes`
-Get all shapes from a file, optionally filtered by page.
+Get all shapes from a supported file, optionally filtered by page.
 
 ```
 tldraw_get_shapes({ path: "notes.tldr", pageId: "page:abc123" })
@@ -178,7 +180,15 @@ tldraw_delete_shape({
 
 ## tldraw File Format
 
-This server works with tldraw v2 format:
+This server accepts the following input formats:
+
+1. Plain tldraw JSON (`.tldr`)
+2. Wrapped JSON with `meta` + `raw` (`.tldr`)
+3. Markdown with embedded tldraw JSON between markers:
+   - `!!!_START_OF_TLDRAW_DATA__DO_NOT_CHANGE_THIS_PHRASE_!!!`
+   - `!!!_END_OF_TLDRAW_DATA__DO_NOT_CHANGE_THIS_PHRASE_!!!`
+
+All reads are normalized to:
 
 ```json
 {
@@ -194,6 +204,8 @@ This server works with tldraw v2 format:
   ]
 }
 ```
+
+Write/edit tools remain `.tldr` only (`.md` is read-only).
 
 ## Development
 

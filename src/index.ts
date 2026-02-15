@@ -18,6 +18,8 @@ const TLDRAW_DIR = process.env.TLDRAW_DIR || join(homedir(), ".tldraw");
 // tldraw file format constants
 const TLDRAW_FILE_FORMAT_VERSION = 1;
 const SCHEMA_VERSION = 2;
+const MARKDOWN_TLDRAW_START_MARKER = "!!!_START_OF_TLDRAW_DATA__DO_NOT_CHANGE_THIS_PHRASE_!!!";
+const MARKDOWN_TLDRAW_END_MARKER = "!!!_END_OF_TLDRAW_DATA__DO_NOT_CHANGE_THIS_PHRASE_!!!";
 
 // Types
 interface TldrawRecord {
@@ -52,6 +54,14 @@ interface SearchMatch {
   shapeType?: string;
   matchedText: string;
   context: string;
+}
+
+type TldrawStorageFormat = "plain-json" | "wrapped-json" | "embedded-markdown";
+
+interface ParsedTldrawContent {
+  file: TldrawFile;
+  storageFormat: TldrawStorageFormat;
+  wrappedContainer?: Record<string, unknown>;
 }
 
 // Security: Prevent path traversal
@@ -110,6 +120,126 @@ function validateTldrawFile(data: unknown): TldrawFile {
   }
   
   return file as unknown as TldrawFile;
+}
+
+function isReadableTldrawPath(path: string): boolean {
+  return path.endsWith(".tldr") || path.endsWith(".md");
+}
+
+function parseJsonContent(content: string, pathLabel: string): unknown {
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid JSON in ${pathLabel}: ${reason}`);
+  }
+}
+
+function extractTldrawJsonFromMarkdown(markdown: string, pathLabel: string): string {
+  const startIndex = markdown.indexOf(MARKDOWN_TLDRAW_START_MARKER);
+  if (startIndex === -1) {
+    throw new Error(
+      `No embedded tldraw block found in ${pathLabel} (missing ${MARKDOWN_TLDRAW_START_MARKER})`
+    );
+  }
+
+  const endIndex = markdown.indexOf(
+    MARKDOWN_TLDRAW_END_MARKER,
+    startIndex + MARKDOWN_TLDRAW_START_MARKER.length
+  );
+  if (endIndex === -1) {
+    throw new Error(
+      `No embedded tldraw block found in ${pathLabel} (missing ${MARKDOWN_TLDRAW_END_MARKER})`
+    );
+  }
+
+  const jsonText = markdown
+    .slice(startIndex + MARKDOWN_TLDRAW_START_MARKER.length, endIndex)
+    .trim();
+
+  if (!jsonText) {
+    throw new Error(`Embedded tldraw block is empty in ${pathLabel}`);
+  }
+
+  return jsonText;
+}
+
+function normalizeTldrawPayload(data: unknown): {
+  file: TldrawFile;
+  wrappedContainer?: Record<string, unknown>;
+} {
+  if (!data || typeof data !== "object") {
+    throw new Error("Invalid tldraw file: not an object");
+  }
+
+  const payload = data as Record<string, unknown>;
+
+  if ("raw" in payload) {
+    if (!payload.raw || typeof payload.raw !== "object") {
+      throw new Error("Invalid wrapped tldraw file: raw must be an object");
+    }
+    return {
+      file: validateTldrawFile(payload.raw),
+      wrappedContainer: payload,
+    };
+  }
+
+  return { file: validateTldrawFile(payload) };
+}
+
+async function parseTldrawContent(path: string): Promise<ParsedTldrawContent> {
+  const filepath = securePath(path);
+
+  if (!isReadableTldrawPath(filepath)) {
+    throw new Error("File must have .tldr or .md extension");
+  }
+
+  if (!existsSync(filepath)) {
+    throw new Error(`File not found: ${path}`);
+  }
+
+  const content = await readFile(filepath, "utf-8");
+
+  if (filepath.endsWith(".md")) {
+    const jsonText = extractTldrawJsonFromMarkdown(content, path);
+    const data = parseJsonContent(jsonText, path);
+    const { file } = normalizeTldrawPayload(data);
+    return {
+      file,
+      storageFormat: "embedded-markdown",
+    };
+  }
+
+  const data = parseJsonContent(content, path);
+  const { file, wrappedContainer } = normalizeTldrawPayload(data);
+  return {
+    file,
+    storageFormat: wrappedContainer ? "wrapped-json" : "plain-json",
+    wrappedContainer,
+  };
+}
+
+async function getWrappedContainerForTldraw(filepath: string): Promise<Record<string, unknown> | undefined> {
+  if (!existsSync(filepath)) {
+    return undefined;
+  }
+
+  try {
+    const existingContent = await readFile(filepath, "utf-8");
+    const existingData = parseJsonContent(existingContent, filepath);
+    if (
+      existingData &&
+      typeof existingData === "object" &&
+      "raw" in (existingData as Record<string, unknown>) &&
+      typeof (existingData as Record<string, unknown>).raw === "object"
+    ) {
+      return existingData as Record<string, unknown>;
+    }
+  } catch {
+    // Best effort: if existing content can't be parsed, fallback to plain write format.
+  }
+
+  return undefined;
 }
 
 // Create empty tldraw file
@@ -199,42 +329,33 @@ function extractText(richText: unknown): string {
 
 // Tool implementations
 async function tldrawRead(path: string): Promise<TldrawFile> {
-  const filepath = securePath(path);
-  
-  if (!filepath.endsWith('.tldr')) {
-    throw new Error('File must have .tldr extension');
-  }
-  
-  if (!existsSync(filepath)) {
-    throw new Error(`File not found: ${path}`);
-  }
-  
-  const content = await readFile(filepath, 'utf-8');
-  const data = JSON.parse(content);
-  
-  return validateTldrawFile(data);
+  const parsed = await parseTldrawContent(path);
+  return parsed.file;
 }
 
 async function tldrawWrite(path: string, content: TldrawFile | string): Promise<string> {
   const filepath = securePath(path);
   
   if (!filepath.endsWith('.tldr')) {
-    throw new Error('File must have .tldr extension');
+    throw new Error('File must have .tldr extension (.md is read-only)');
   }
   
   // Ensure parent directory exists
   const dir = filepath.substring(0, filepath.lastIndexOf('/'));
   await ensureDir(dir);
   
-  // Parse and validate if string
-  let file: TldrawFile;
-  if (typeof content === 'string') {
-    file = validateTldrawFile(JSON.parse(content));
-  } else {
-    file = validateTldrawFile(content);
-  }
-  
-  await writeFile(filepath, JSON.stringify(file, null, 2), 'utf-8');
+  const parsedInput = typeof content === "string"
+    ? parseJsonContent(content, path)
+    : content;
+  const { file, wrappedContainer: inputWrappedContainer } = normalizeTldrawPayload(parsedInput);
+
+  const existingWrappedContainer = await getWrappedContainerForTldraw(filepath);
+  const wrappedContainer = existingWrappedContainer || inputWrappedContainer;
+  const outputContent = wrappedContainer
+    ? { ...wrappedContainer, raw: file }
+    : file;
+
+  await writeFile(filepath, JSON.stringify(outputContent, null, 2), 'utf-8');
   
   return `Successfully wrote: ${path}`;
 }
@@ -252,16 +373,16 @@ async function tldrawList(recursive: boolean = false): Promise<FileInfo[]> {
       
       if (entry.isDirectory() && recursive) {
         await scanDir(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith('.tldr')) {
+      } else if (entry.isFile() && isReadableTldrawPath(entry.name)) {
         try {
-          const content = await readFile(fullPath, 'utf-8');
-          const file = validateTldrawFile(JSON.parse(content));
+          const parsed = await parseTldrawContent(fullPath);
+          const file = parsed.file;
           
           const pages = file.records.filter(r => r.typeName === 'page');
           const shapes = file.records.filter(r => r.typeName === 'shape');
           
           results.push({
-            name: entry.name.replace('.tldr', ''),
+            name: entry.name.replace(/\.(tldr|md)$/i, ''),
             path: relative(TLDRAW_DIR, fullPath) || fullPath,
             pageCount: pages.length,
             shapeCount: shapes.length
@@ -471,7 +592,7 @@ async function tldrawCreateFile(path: string, name?: string): Promise<string> {
 
 // Input validation schemas
 const ReadSchema = z.object({
-  path: z.string().describe("Path to .tldr file (relative to TLDRAW_DIR or absolute)")
+  path: z.string().describe("Path to .tldr file or markdown file with embedded tldraw data")
 });
 
 const WriteSchema = z.object({
@@ -489,7 +610,7 @@ const SearchSchema = z.object({
 });
 
 const GetShapesSchema = z.object({
-  path: z.string().describe("Path to .tldr file"),
+  path: z.string().describe("Path to .tldr file or markdown file with embedded tldraw data"),
   pageId: z.string().optional().describe("Filter by page ID")
 });
 
@@ -539,11 +660,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "tldraw_read",
-        description: `Read a tldraw canvas file (.tldr). Returns parsed JSON with pages and shapes. Base directory: ${TLDRAW_DIR}`,
+        description: `Read a tldraw canvas file (.tldr) or a markdown file with embedded tldraw data. Returns parsed JSON with pages and shapes. Base directory: ${TLDRAW_DIR}`,
         inputSchema: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Path to .tldr file (relative to TLDRAW_DIR or absolute)" }
+            path: { type: "string", description: "Path to .tldr file or markdown file with embedded tldraw data (relative to TLDRAW_DIR or absolute)" }
           },
           required: ["path"]
         }
@@ -574,7 +695,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "tldraw_list",
-        description: `List all .tldr files in ${TLDRAW_DIR}. Returns file info with page/shape counts.`,
+        description: `List supported tldraw files in ${TLDRAW_DIR} (.tldr and markdown with embedded tldraw). Returns file info with page/shape counts.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -584,7 +705,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "tldraw_search",
-        description: "Search text content across all tldraw files. Returns matching shapes with context.",
+        description: "Search text content across all supported tldraw files (.tldr and markdown with embedded tldraw). Returns matching shapes with context.",
         inputSchema: {
           type: "object",
           properties: {
@@ -596,11 +717,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "tldraw_get_shapes",
-        description: "Get all shapes from a tldraw file, optionally filtered by page.",
+        description: "Get all shapes from a tldraw file (.tldr or markdown with embedded tldraw), optionally filtered by page.",
         inputSchema: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Path to .tldr file" },
+            path: { type: "string", description: "Path to .tldr file or markdown file with embedded tldraw data" },
             pageId: { type: "string", description: "Filter by page ID" }
           },
           required: ["path"]
@@ -692,7 +813,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const files = await tldrawList(recursive);
         if (files.length === 0) {
           return {
-            content: [{ type: "text", text: `No .tldr files found in ${TLDRAW_DIR}` }]
+            content: [{ type: "text", text: `No supported tldraw files found in ${TLDRAW_DIR}` }]
           };
         }
         const formatted = files.map(f => 
